@@ -14,13 +14,15 @@
          print-entry-groups
          print-cross-reference-scores
          plot-entry-groups
+         frame-of-plot
          (for-syntax atom commaseq++)
          )
 
 (require syntax/parse/define
          (for-syntax syntax/parse/class/paren-shape)
          plot
-         (prefix-in pict/ (combine-in pict racket/draw)))
+         (prefix-in pict/ (combine-in pict racket/draw))
+         (prefix-in gui/ racket/gui/base))
 
 (begin-for-syntax
   (define-syntax-class atom
@@ -385,5 +387,28 @@
                                       gs))
 
     snip))
+
+;; -----------------------------------------------------------------------------
+
+;; Putting the Plot into a Gui Window
+
+(define (frame-of-plot dims plot)
+  (match-define (list w h) dims)
+
+  (define pasteboard (new gui/pasteboard%))
+  (send pasteboard insert plot)
+
+  (define frame
+    (new gui/frame%
+         [label "Hamilton Cross-References"]
+         [width (+ w 50)]
+         [height (+ h 60)]))
+
+  (define canvas
+    (new gui/editor-canvas%
+         [parent frame]
+         [editor pasteboard]))
+
+  frame)
 
 ;; -----------------------------------------------------------------------------

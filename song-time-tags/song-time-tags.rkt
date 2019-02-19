@@ -73,9 +73,12 @@
    (define plot
      (plot-entry-groups ds.id songs drs.id sorted-grouped-entries))
 
+   (define frame
+     (frame-of-plot ds.id plot))
+
    (module+ main
      (print-entry-groups sorted-grouped-entries)
      ;(print-cross-reference-scores cross-reference-scores)
-     plot)
+     (send frame show #true))
    ))
 
