@@ -22,7 +22,8 @@
          plot
          (prefix-in pict/ (combine-in pict racket/draw))
          (prefix-in gui/ racket/gui/base)
-         "util/commabrack.rkt")
+         "util/commabrack.rkt"
+         "util/play-sound.rkt")
 
 (begin-for-syntax
   (define-syntax-class song
@@ -244,13 +245,15 @@
 (define (render-phrase i)
   (list (hrule i #:width 0.2 #:color i)))
 
+(define (find-entry-in-group song start group t)
+  (for/last ([e (in-list group)]
+             #:when (equal? song (entry-song e))
+             #:when (<= (+ start (entry-seconds/within-song e))
+                        t))
+    e))
+
 (define (render-phrase-instance song start dur phrase-i group t)
-  (define ent
-    (for/last ([e (in-list group)]
-               #:when (equal? song (entry-song e))
-               #:when (<= (+ start (entry-seconds/within-song e))
-                          t))
-      e))
+  (define ent (find-entry-in-group song start group t))
   (match ent
     [(entry song t-sym _ phrase who)
      (define p
@@ -274,36 +277,75 @@
     [_
      '()]))
 
-(define ((make-current-song-renderer songs phrases dur-tbl start-tbl gs)
-         snip event x y)
-  (define overlays
-    (and x y (eq? (send event get-event-type) 'motion)
-         (let ([song (get-current-song songs dur-tbl start-tbl x)]
-               [phrase-i (exact-round y)])
-           (define phrase-exists?
-             (and (<= 0 phrase-i) (< phrase-i (length gs))))
-           (append
-            (cond
-              [phrase-exists?
-               (render-phrase phrase-i)]
-              [else
-               '()])
-            (cond
-              [song
-               (render-song dur-tbl start-tbl song)]
-              [else
-               '()])
-            (cond
-              [(and song phrase-exists?)
-               (render-phrase-instance song
-                                       (hash-ref start-tbl song)
-                                       (hash-ref dur-tbl song)
-                                       phrase-i
-                                       (list-ref gs phrase-i)
-                                       x)]
-              [else
-               '()])))))
-  (send snip set-overlay-renderers overlays))
+(define (make-current-song-renderer songs phrases dur-tbl start-tbl file-tbl gs)
+
+  (define held-playing? #false)
+  (define (reset-held-playing!)
+    (when held-playing?
+      (send held-playing? stop)
+      (set! held-playing? #false)))
+  (define (start-play-phrase! song start dur phrase-i group t)
+    (define file (hash-ref file-tbl song #false))
+    (define ent (and file (find-entry-in-group song start group t)))
+    (match ent
+      [(entry song t-start-sym t-end-sym phrase who)
+       (define start (duration-symbol-seconds t-start-sym))
+       (define vps
+         (video-player-server/file file))
+       (send vps seek start)
+       #;(send vps play)
+       (set! held-playing? vps)]
+      [_ (void)]))
+
+  (define (callback snip event x y)
+    (define event-type (send event get-event-type))
+
+    (when (and x y (eq? event-type 'left-down))
+      (reset-held-playing!)
+      (define song (get-current-song songs dur-tbl start-tbl x))
+      (define phrase-i (exact-round y))
+      (define phrase-exists? (and (<= 0 phrase-i) (< phrase-i (length gs))))
+      (when (and song phrase-exists?)
+        (start-play-phrase! song
+                            (hash-ref start-tbl song)
+                            (hash-ref dur-tbl song)
+                            phrase-i
+                            (list-ref gs phrase-i)
+                            x)))
+
+    (when (eq? event-type 'left-up)
+      (reset-held-playing!))
+    
+    (define overlays
+      (and x y (eq? event-type 'motion)
+           (let ([song (get-current-song songs dur-tbl start-tbl x)]
+                 [phrase-i (exact-round y)])
+             (define phrase-exists?
+               (and (<= 0 phrase-i) (< phrase-i (length gs))))
+             (append
+              (cond
+                [phrase-exists?
+                 (render-phrase phrase-i)]
+                [else
+                 '()])
+              (cond
+                [song
+                 (render-song dur-tbl start-tbl song)]
+                [else
+                 '()])
+              (cond
+                [(and song phrase-exists?)
+                 (render-phrase-instance song
+                                         (hash-ref start-tbl song)
+                                         (hash-ref dur-tbl song)
+                                         phrase-i
+                                         (list-ref gs phrase-i)
+                                         x)]
+                [else
+                 '()])))))
+    (send snip set-overlay-renderers overlays))
+
+  callback)
 
 
 (define (plot-entry-groups dim songs dur-tbl file-tbl gs)
@@ -351,6 +393,7 @@
                                       phrases
                                       dur-sec-tbl
                                       start-sec-tbl
+                                      file-tbl
                                       gs))
 
     snip))

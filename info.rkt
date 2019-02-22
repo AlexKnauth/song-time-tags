@@ -11,5 +11,7 @@
     "pict-lib"
     "sweet-exp-lib"
     "syntax-classes-lib"
+    ;; --- for video, should it depend on v0-2, testing, stable, or what?
+    "video-v0-2"
     ))
 
