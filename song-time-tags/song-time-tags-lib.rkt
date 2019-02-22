@@ -15,70 +15,31 @@
          print-cross-reference-scores
          plot-entry-groups
          frame-of-plot
-         (for-syntax atom commaseq++)
          )
 
 (require syntax/parse/define
          (for-syntax syntax/parse/class/paren-shape)
          plot
          (prefix-in pict/ (combine-in pict racket/draw))
-         (prefix-in gui/ racket/gui/base))
-
-(begin-for-syntax
-  (define-syntax-class atom
-    #:attributes [norm]
-    #:datum-literals [unquote]
-    [pattern {~and {~not {~or (unquote . _) {~brackets _ ...}}}
-                   norm:expr}])
-
-  (define-splicing-syntax-class brackapp
-    [pattern {~seq f:atom {~brackets a:commaseq}}
-      #:with norm #'(f.norm a.norm ...)]
-    [pattern {~seq {~brackets f:atom a:commaseq}}
-      #:with norm #'(f.norm a.norm ...)])
-
-  (define-splicing-syntax-class commabrackapp
-    #:datum-literals [unquote]
-    [pattern {~seq ({~datum unquote} f:atom) {~brackets a:commaseq}}
-      #:with norm #'(f.norm a.norm ...)]
-    [pattern {~seq ({~datum unquote} {~brackets f:atom a:commaseq})}
-      #:with norm #'(f.norm a.norm ...)])
-
-  (define-splicing-syntax-class commaseq+
-    #:attributes [[norm 1]]
-    [pattern {~seq a:bexpr b:commabexpr ...}
-      #:with [norm ...] #'(a.norm b.norm ...)])
-  (define-splicing-syntax-class commaseq++
-    #:attributes [[norm 1]]
-    [pattern {~seq a:bexpr b:commabexpr ...+}
-      #:with [norm ...] #'(a.norm b.norm ...)])
-  (define-splicing-syntax-class commaseq
-    #:attributes [[norm 1]]
-    [pattern {~seq} #:with [norm ...] '()]
-    [pattern {~seq :commaseq+}])
-
-  (define-splicing-syntax-class bexpr
-    #:attributes [norm]
-    [pattern {~seq :brackapp}]
-    [pattern {~seq :atom}])
-
-  (define-splicing-syntax-class commabexpr
-    #:attributes [norm]
-    #:datum-literals [unquote]
-    [pattern {~seq :commabrackapp}]
-    [pattern {~seq ({~datum unquote} :atom)}]))
+         (prefix-in gui/ racket/gui/base)
+         "util/commabrack.rkt")
 
 (begin-for-syntax
   (define-syntax-class song
     #:datum-literals [unquote]
-    [pattern (a, b)
+    [pattern (a:number, b:number)
       #:with datum #'(a b)])
 
+  (define-splicing-syntax-class who-list
+    [pattern {~seq} #:with datum #'()]
+    [pattern {~seq (who:commaseq)} #:with datum #'(who.norm ...)])
+
   (define-syntax-class time-tag
-    [pattern (time tag:id ...)
-      #:with datum #'[time (tag ...) ()]]
-    [pattern (time tag:id ... (who:commaseq))
-      #:with datum #'[time (tag ...) (who.norm ...)]]))
+    #:datum-literals [-]
+    [pattern (start-time - ~! end-time tag:id ... who:who-list)
+      #:with datum #'[start-time end-time (tag ...) who.datum]]
+    [pattern (start-time tag:id ... who:who-list)
+      #:with datum #'[start-time start-time (tag ...) who.datum]]))
 
 (define-simple-macro
   (song-names
@@ -101,11 +62,14 @@
     ...)
   (hash (~@ 'song.datum 'time) ...))
 
+(struct entry [song start-sym end-sym tag who]
+  #:transparent)
+
 (define (song-time-tags->entries v)
   (for*/list ([p1 (in-list v)]
              [p2 (in-list (cdr p1))]
-             [tag (in-list (second p2))])
-    (list (car p1) (car p2) tag (third p2))))
+             [tag (in-list (third p2))])
+    (entry (car p1) (first p2) (second p2) tag (fourth p2))))
 
 ;; -----------------------------------------------------------------------------
 
@@ -123,16 +87,17 @@
      (+ (* 60 (string->number m)) (string->number s))]))
 
 (define/match (entry-key ent)
-  [[(list (list (? number? a) (? number? b))
-          (? symbol? (app duration-symbol-seconds s))
-          (? symbol?)
-          (? list?))]
+  [[(entry (list (? number? a) (? number? b))
+           (? symbol? (app duration-symbol-seconds s))
+           (? symbol?)
+           (? symbol?)
+           (? list?))]
    (list a b s)])
 
 (define (group-and-sort-entries entries)
   (sort
     (group-by
-      third
+      entry-tag
       (song-time-tags->entries entries))
     list-of-number<?
     #:key (compose entry-key last)))
@@ -161,22 +126,23 @@
             (+ t dur))))
 
 (define/match (entry-seconds/within-song ent)
-  [[(list song
-          (? symbol? (app duration-symbol-seconds s))
-          (? symbol?)
-          (? list?))]
+  [[(entry song
+           (? symbol? (app duration-symbol-seconds s))
+           (? symbol?)
+           (? symbol?)
+           (? list?))]
    s])
 
 (define (entry-seconds songs dur-tbl ent)
-  (+ (song-start-seconds songs dur-tbl (first ent))
+  (+ (song-start-seconds songs dur-tbl (entry-song ent))
      (entry-seconds/within-song ent)))
 
 ;; -----------------------------------------------------------------------------
 
 (define (tag-cross-reference-score time-tags tag)
   (define (uses-tag? g)
-    (for/or ([e (in-list g)])
-      (equal? (second e) tag)))
+    (for/or ([e (in-list (cdr g))])
+      (member tag (third e))))
   ;; the number of songs it's used in
   (count uses-tag? time-tags))
 
@@ -191,7 +157,7 @@
   ;;       count the number of songs it's used in
   ;;       and add those together
   (define song-ttg (dict-ref time-tags song))
-  (define tags-used (remove-duplicates (map second song-ttg)))
+  (define tags-used (remove-duplicates (append-map third song-ttg)))
   (for/sum ([tag (in-list tags-used)])
     (tag-cross-reference-score time-tags tag)))
 
@@ -217,13 +183,14 @@
 
 (define (print-entry-groups gs)
   (for ([g (in-list gs)])
-    (define name (third (last g)))
+    (define name (entry-tag (last g)))
     (printf "~a:\n" name)
     (for ([e (in-list g)])
-      (match-define (list s t _ who) e)
-      (printf "  ~a ~a ~a\n"
+      (match-define (entry s ta tb _ who) e)
+      (printf "  ~a ~a - ~a ~a\n"
               (format-song s)
-              t
+              ta
+              tb
               (format-who-list who)))
     (printf "\n")))
 
@@ -278,14 +245,14 @@
   (list (hrule i #:width 0.2 #:color i)))
 
 (define (render-phrase-instance song start dur phrase-i group t)
-  (define entry
+  (define ent
     (for/last ([e (in-list group)]
-               #:when (equal? song (first e))
+               #:when (equal? song (entry-song e))
                #:when (<= (+ start (entry-seconds/within-song e))
                           t))
       e))
-  (match entry
-    [(list song t-sym phrase who)
+  (match ent
+    [(entry song t-sym _ phrase who)
      (define p
        (pict/vl-append
         (pict/text (format "~a ~a" (format-song song) t-sym))
@@ -339,12 +306,12 @@
   (send snip set-overlay-renderers overlays))
 
 
-(define (plot-entry-groups dim songs dur-tbl gs)
+(define (plot-entry-groups dim songs dur-tbl file-tbl gs)
   (define n (length gs))
   (define dur-sec-tbl (song-duration-seconds-table songs dur-tbl))
   (define start-sec-tbl (song-start-seconds-table songs dur-sec-tbl))
   (define phrases
-    (for/list ([g (in-list gs)]) (third (last g))))
+    (for/list ([g (in-list gs)]) (entry-tag (last g))))
   (parameterize
       ([plot-x-ticks (time-ticks)]
        [plot-y-ticks

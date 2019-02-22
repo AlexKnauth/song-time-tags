@@ -4,11 +4,14 @@
                      [tuple-app #%app])
          (except-out (all-from-out racket) #%module-begin #%app)
          dimensions
-         (all-from-out "song-time-tags-lib.rkt"))
+         (all-from-out "song-time-tags-lib.rkt"
+                       "song-files.rkt"))
 
 (require syntax/parse/define
          (for-syntax syntax/parse/class/paren-shape)
-         "song-time-tags-lib.rkt")
+         "song-time-tags-lib.rkt"
+         "song-files.rkt"
+         "util/commabrack.rkt")
 
 (define (dimensions w h) (list w h))
 
@@ -41,6 +44,12 @@
     [pattern {~and e (song-durations . _)}
       #:with id #'durations
       #:with def #'(define id e)])
+
+  (define-syntax-class song-files
+    #:literals [song-files]
+    [pattern {~and e (song-files . _)}
+      #:with id #'files
+      #:with def #'(define id e)])
   )
 
 (define-simple-macro
@@ -48,7 +57,10 @@
    {~alt {~once ds:dimensions}
          {~once ns:song-names}
          {~once tgs:song-time-tags}
-         {~once drs:song-durations}}
+         {~once drs:song-durations}
+         {~optional fls:song-files
+                    #:defaults ([fls.id #'files]
+                                [fls.def #'(define files #f)])}}
    ...)
   #:with plot (datum->syntax this-syntax 'plot)
   (#%module-begin
@@ -68,10 +80,12 @@
 
    drs.def
 
+   fls.def
+
    ;; ------------------------------------------------------
 
    (define plot
-     (plot-entry-groups ds.id songs drs.id sorted-grouped-entries))
+     (plot-entry-groups ds.id songs drs.id fls.id sorted-grouped-entries))
 
    (define frame
      (frame-of-plot ds.id plot))
