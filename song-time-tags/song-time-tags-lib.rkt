@@ -214,18 +214,13 @@
         #:draw-border? #f #:color FloralWhite/α))
      (pict/cc-superimpose bg p)]))
 
-(define (render-phrase-instance song start phrase-i group t)
-  (define ent (find-entry-in-group song start group t))
-  (cond
-    [ent
-     (cons
-      (point-pict (vector t phrase-i)
-                  (entry-info-pict ent)
-                  #:anchor 'auto
-                  #:point-sym 'none)
-      (render-phrase-time (+ start (entry-start ent)) phrase-i))]
-    [else
-     '()]))
+(define (render-phrase-instance ent start phrase-i t)
+  (cons
+   (point-pict (vector t phrase-i)
+               (entry-info-pict ent)
+               #:anchor 'auto
+               #:point-sym 'none)
+   (render-phrase-time (+ start (entry-start ent)) phrase-i)))
 
 (define (make-current-song-renderer songs dur-tbl start-tbl file-tbl n gs)
 
@@ -234,11 +229,10 @@
     (when held-playing?
       (send held-playing? stop)
       (set! held-playing? #false)))
-  (define (start-play-phrase! song start dur phrase-i group t)
-    (define file (hash-ref file-tbl song #false))
-    (define ent (and file (find-entry-in-group song start group t)))
+  (define (start-play-phrase! ent)
     (match ent
-      [(entry song t-start _ phrase who)
+      [(entry song t-start _ _ _)
+       (define file (hash-ref file-tbl song #false))
        (define vps
          (video-player-server/file file))
        (send vps seek t-start)
@@ -256,24 +250,25 @@
 
        (define phrase-i (exact-round y))
        (define phrase-exists? (and (<= 0 phrase-i) (< phrase-i n)))
-       (callback/overlay snip x y song phrase-i phrase-exists?)
+       (define ent
+         (and song phrase-exists?
+              (find-entry-in-group song
+                                   (hash-ref start-tbl song)
+                                   (list-ref gs phrase-i)
+                                   x)))
+       (callback/overlay snip x song phrase-i phrase-exists? ent)
        (when (eq? event-type 'left-down)
-         (callback/sound x song phrase-i phrase-exists?))]
+         (callback/sound ent))]
       [else
        (send snip set-overlay-renderers #false)
        (reset-held-playing!)]))
 
-  (define (callback/sound x song phrase-i phrase-exists?)
+  (define (callback/sound ent)
     (reset-held-playing!)
-    (when (and song phrase-exists?)
-      (start-play-phrase! song
-                          (hash-ref start-tbl song)
-                          (hash-ref dur-tbl song)
-                          phrase-i
-                          (list-ref gs phrase-i)
-                          x)))
+    (when ent
+      (start-play-phrase! ent)))
 
-  (define (callback/overlay snip x y song phrase-i phrase-exists?)
+  (define (callback/overlay snip x song phrase-i phrase-exists? ent)
     (define overlays
       (append
        (cond
@@ -287,12 +282,8 @@
          [else
           '()])
        (cond
-         [(and song phrase-exists?)
-          (render-phrase-instance song
-                                  (hash-ref start-tbl song)
-                                  phrase-i
-                                  (list-ref gs phrase-i)
-                                  x)]
+         [ent
+          (render-phrase-instance ent (hash-ref start-tbl song) phrase-i x)]
          [else
           '()])))
     (send snip set-overlay-renderers overlays))
