@@ -22,6 +22,7 @@
          "util/commabrack.rkt"
          "util/play-sound.rkt"
          "util/time-symbol.rkt"
+         "util/plot.rkt"
          "song-durations.rkt")
 
 (begin-for-syntax
@@ -98,17 +99,9 @@
 (define (song-start-seconds start-sec-tbl s)
   (hash-ref start-sec-tbl s))
 
-(define/match (entry-seconds/within-song ent)
-  [[(entry song
-           (? number? s)
-           (? number?)
-           (? symbol?)
-           (? list?))]
-   s])
-
 (define (entry-seconds start-sec-tbl ent)
   (+ (song-start-seconds start-sec-tbl (entry-song ent))
-     (entry-seconds/within-song ent)))
+     (entry-start ent)))
 
 ;; -----------------------------------------------------------------------------
 
@@ -178,13 +171,6 @@
 
 ;; Plotting the songs and phrases
 
-(define FloralWhite (make-object pict/color% "FloralWhite"))
-(define FloralWhite/α (make-object pict/color%
-                        (send FloralWhite red)
-                        (send FloralWhite green)
-                        (send FloralWhite blue)
-                        0.75))
-
 (define (get-current-song songs dur-tbl start-tbl t)
   (for/or ([s (in-list songs)])
     (define start (hash-ref start-tbl s #f))
@@ -197,35 +183,20 @@
                 s)))))
 
 (define (render-song dur-tbl start-tbl song)
-  (cond
-    [song
-     (define start (hash-ref start-tbl song))
-     (define dur (hash-ref dur-tbl song))
-     (define end (+ start dur))
-     (list
-      ;; TODO: It looks like `nonrenderer?` values aren't allowed here. Why not?
-      #;(x-ticks (list (tick start #t (format-song song))))
-      (point-label (vector start -1) (~a (second song))
-                   #:anchor 'auto
-                   #:point-sym 'none)
-      (rectangles (list (vector (ivl start end) (ivl -inf.0 +inf.0)))
-                  #:color "lightgray"
-                  #:alpha 0.1))]
-    [else
-     '()]))
-
-(define (render-phrase i)
-  (list (hrule i #:width 0.2 #:color i)))
+  (define start (hash-ref start-tbl song))
+  (define dur (hash-ref dur-tbl song))
+  (define end (+ start dur))
+  (render-named-time-interval start end (~a (second song))))
 
 (define (find-entry-in-group song start group t)
   (for/last ([e (in-list group)]
              #:when (equal? song (entry-song e))
-             #:when (<= (+ start (entry-seconds/within-song e))
+             #:when (<= (+ start (entry-start e))
                         t))
     e))
 
-(define (render-phrase-instance song start dur phrase-i group t)
-  (define ent (find-entry-in-group song start group t))
+;; Entry -> Pict
+(define (entry-info-pict ent)
   (match ent
     [(entry song t* _ phrase who)
      (define p
@@ -241,17 +212,22 @@
         (+ (pict/pict-height p) 10)
         -0.2
         #:draw-border? #f #:color FloralWhite/α))
-     (list (vrule (+ start t*)
-                  #:width 0.2
-                  #:color phrase-i)
-           (point-pict (vector t phrase-i)
-                       (pict/cc-superimpose bg p)
-                       #:anchor 'auto
-                       #:point-sym 'none))]
-    [_
+     (pict/cc-superimpose bg p)]))
+
+(define (render-phrase-instance song start phrase-i group t)
+  (define ent (find-entry-in-group song start group t))
+  (cond
+    [ent
+     (cons
+      (point-pict (vector t phrase-i)
+                  (entry-info-pict ent)
+                  #:anchor 'auto
+                  #:point-sym 'none)
+      (render-phrase-time (+ start (entry-start ent)) phrase-i))]
+    [else
      '()]))
 
-(define (make-current-song-renderer songs phrases dur-tbl start-tbl file-tbl gs)
+(define (make-current-song-renderer songs dur-tbl start-tbl file-tbl n gs)
 
   (define held-playing? #false)
   (define (reset-held-playing!)
@@ -272,49 +248,53 @@
   (define (callback snip event x y)
     (define event-type (send event get-event-type))
 
-    (when (and x y (eq? event-type 'left-down))
-      (reset-held-playing!)
-      (define song (get-current-song songs dur-tbl start-tbl x))
-      (define phrase-i (exact-round y))
-      (define phrase-exists? (and (<= 0 phrase-i) (< phrase-i (length gs))))
-      (when (and song phrase-exists?)
-        (start-play-phrase! song
-                            (hash-ref start-tbl song)
-                            (hash-ref dur-tbl song)
-                            phrase-i
-                            (list-ref gs phrase-i)
-                            x)))
+    (cond
+      [(and held-playing? x y (eq? event-type 'motion))
+       (void)]
+      [(and x y (memq event-type '(motion left-down)))
+       (define song (get-current-song songs dur-tbl start-tbl x))
 
-    (when (eq? event-type 'left-up)
-      (reset-held-playing!))
-    
+       (define phrase-i (exact-round y))
+       (define phrase-exists? (and (<= 0 phrase-i) (< phrase-i n)))
+       (callback/overlay snip x y song phrase-i phrase-exists?)
+       (when (eq? event-type 'left-down)
+         (callback/sound x song phrase-i phrase-exists?))]
+      [else
+       (send snip set-overlay-renderers #false)
+       (reset-held-playing!)]))
+
+  (define (callback/sound x song phrase-i phrase-exists?)
+    (reset-held-playing!)
+    (when (and song phrase-exists?)
+      (start-play-phrase! song
+                          (hash-ref start-tbl song)
+                          (hash-ref dur-tbl song)
+                          phrase-i
+                          (list-ref gs phrase-i)
+                          x)))
+
+  (define (callback/overlay snip x y song phrase-i phrase-exists?)
     (define overlays
-      (and x y (eq? event-type 'motion)
-           (let ([song (get-current-song songs dur-tbl start-tbl x)]
-                 [phrase-i (exact-round y)])
-             (define phrase-exists?
-               (and (<= 0 phrase-i) (< phrase-i (length gs))))
-             (append
-              (cond
-                [phrase-exists?
-                 (render-phrase phrase-i)]
-                [else
-                 '()])
-              (cond
-                [song
-                 (render-song dur-tbl start-tbl song)]
-                [else
-                 '()])
-              (cond
-                [(and song phrase-exists?)
-                 (render-phrase-instance song
-                                         (hash-ref start-tbl song)
-                                         (hash-ref dur-tbl song)
-                                         phrase-i
-                                         (list-ref gs phrase-i)
-                                         x)]
-                [else
-                 '()])))))
+      (append
+       (cond
+         [phrase-exists?
+          (render-phrase phrase-i)]
+         [else
+          '()])
+       (cond
+         [song
+          (render-song dur-tbl start-tbl song)]
+         [else
+          '()])
+       (cond
+         [(and song phrase-exists?)
+          (render-phrase-instance song
+                                  (hash-ref start-tbl song)
+                                  phrase-i
+                                  (list-ref gs phrase-i)
+                                  x)]
+         [else
+          '()])))
     (send snip set-overlay-renderers overlays))
 
   callback)
@@ -347,49 +327,22 @@
        #:y-min -1
        #:y-max (add1 n)
        (list
-        (for/list ([s (in-list songs)])
-          (vrule
-           #:color (if (= (second s) 1) "black" "gray")
-           (hash-ref start-sec-tbl s)))
+        (render-song-grid-lines start-sec-tbl)
+        (render-phrase-grid-lines n)
         (for/list ([(g i) (in-indexed (in-list gs))])
-          (list
-           (hrule i #:width 0.05 #:color i)
-           (points
-            #:color i
-            (for/list ([e (in-list g)])
-              (list (entry-seconds start-sec-tbl e) i))))))))
+          (points
+           #:color i
+           (for/list ([e (in-list g)])
+             (list (entry-seconds start-sec-tbl e) i)))))))
 
     (send snip set-mouse-event-callback
           (make-current-song-renderer songs
-                                      phrases
                                       dur-sec-tbl
                                       start-sec-tbl
                                       file-tbl
+                                      n
                                       gs))
 
     snip))
-
-;; -----------------------------------------------------------------------------
-
-;; Putting the Plot into a Gui Window
-
-(define (frame-of-plot dims plot)
-  (match-define (list w h) dims)
-
-  (define pasteboard (new gui/pasteboard%))
-  (send pasteboard insert plot)
-
-  (define frame
-    (new gui/frame%
-         [label "Hamilton Cross-References"]
-         [width (+ w 50)]
-         [height (+ h 60)]))
-
-  (define canvas
-    (new gui/editor-canvas%
-         [parent frame]
-         [editor pasteboard]))
-
-  frame)
 
 ;; -----------------------------------------------------------------------------
