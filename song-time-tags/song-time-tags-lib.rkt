@@ -6,9 +6,6 @@
          song-time-tags->entries
          group-and-sort-entries
          song-cross-reference-scores
-         duration-symbol-seconds
-         song-duration-seconds
-         song-duration-seconds-table
          song-start-seconds
          song-start-seconds-table
          print-entry-groups
@@ -23,7 +20,9 @@
          (prefix-in pict/ (combine-in pict racket/draw))
          (prefix-in gui/ racket/gui/base)
          "util/commabrack.rkt"
-         "util/play-sound.rkt")
+         "util/play-sound.rkt"
+         "util/time-symbol.rkt"
+         "song-durations.rkt")
 
 (begin-for-syntax
   (define-syntax-class song
@@ -37,10 +36,12 @@
 
   (define-syntax-class time-tag
     #:datum-literals [-]
-    [pattern (start-time - ~! end-time tag:id ... who:who-list)
-      #:with datum #'[start-time end-time (tag ...) who.datum]]
-    [pattern (start-time tag:id ... who:who-list)
-      #:with datum #'[start-time start-time (tag ...) who.datum]]))
+    [pattern (start-time:time - ~! end-time:time tag:id ... who:who-list)
+      #:with datum
+      #'[start-time.seconds end-time.seconds (tag ...) who.datum]]
+    [pattern (start-time:time tag:id ... who:who-list)
+      #:with datum
+      #'[start-time.seconds start-time.seconds (tag ...) who.datum]]))
 
 (define-simple-macro
   (song-names
@@ -57,13 +58,7 @@
   (quote
     ([song.datum . (time-tag.datum ...)] ...)))
 
-(define-simple-macro
-  (song-durations
-    (song:song time)
-    ...)
-  (hash (~@ 'song.datum 'time) ...))
-
-(struct entry [song start-sym end-sym tag who]
+(struct entry [song start end tag who]
   #:transparent)
 
 (define (song-time-tags->entries v)
@@ -82,15 +77,10 @@
   [['() (cons _ _)] #true]
   [[(cons _ _) '()] #false])
 
-(define (duration-symbol-seconds s)
-  (match (symbol->string s)
-    [(regexp #px"^(\\d+):(\\d+)$" (list _ m s))
-     (+ (* 60 (string->number m)) (string->number s))]))
-
 (define/match (entry-key ent)
   [[(entry (list (? number? a) (? number? b))
-           (? symbol? (app duration-symbol-seconds s))
-           (? symbol?)
+           (? number? s)
+           (? number?)
            (? symbol?)
            (? list?))]
    (list a b s)])
@@ -105,37 +95,19 @@
 
 ;; -----------------------------------------------------------------------------
 
-(define (song-duration-seconds dur-tbl s)
-  (duration-symbol-seconds (hash-ref dur-tbl s)))
-
-(define (song-duration-seconds-table songs dur-tbl)
-  (for/hash ([s (in-list songs)])
-    (values s (song-duration-seconds dur-tbl s))))
-
-(define (song-start-seconds songs dur-tbl s)
-  (for/sum ([before (in-list songs)]
-            #:break (equal? before s))
-    (song-duration-seconds dur-tbl before)))
-
-(define (song-start-seconds-table songs dur-sec-tbl)
-  (for/fold ([start-sec-tbl (hash)]
-             [t 0]
-             #:result start-sec-tbl)
-            ([s (in-list songs)])
-    (define dur (hash-ref dur-sec-tbl s))
-    (values (hash-set start-sec-tbl s t)
-            (+ t dur))))
+(define (song-start-seconds start-sec-tbl s)
+  (hash-ref start-sec-tbl s))
 
 (define/match (entry-seconds/within-song ent)
   [[(entry song
-           (? symbol? (app duration-symbol-seconds s))
-           (? symbol?)
+           (? number? s)
+           (? number?)
            (? symbol?)
            (? list?))]
    s])
 
-(define (entry-seconds songs dur-tbl ent)
-  (+ (song-start-seconds songs dur-tbl (entry-song ent))
+(define (entry-seconds start-sec-tbl ent)
+  (+ (song-start-seconds start-sec-tbl (entry-song ent))
      (entry-seconds/within-song ent)))
 
 ;; -----------------------------------------------------------------------------
@@ -190,8 +162,8 @@
       (match-define (entry s ta tb _ who) e)
       (printf "  ~a ~a - ~a ~a\n"
               (format-song s)
-              ta
-              tb
+              (seconds->time-symbol ta)
+              (seconds->time-symbol tb)
               (format-who-list who)))
     (printf "\n")))
 
@@ -255,10 +227,12 @@
 (define (render-phrase-instance song start dur phrase-i group t)
   (define ent (find-entry-in-group song start group t))
   (match ent
-    [(entry song t-sym _ phrase who)
+    [(entry song t* _ phrase who)
      (define p
        (pict/vl-append
-        (pict/text (format "~a ~a" (format-song song) t-sym))
+        (pict/text (format "~a ~a"
+                           (format-song song)
+                           (seconds->time-symbol t*)))
         (pict/text (~a phrase))
         (pict/text (format-who-list who))))
      (define bg
@@ -267,7 +241,7 @@
         (+ (pict/pict-height p) 10)
         -0.2
         #:draw-border? #f #:color FloralWhite/α))
-     (list (vrule (+ start (duration-symbol-seconds t-sym))
+     (list (vrule (+ start t*)
                   #:width 0.2
                   #:color phrase-i)
            (point-pict (vector t phrase-i)
@@ -288,12 +262,10 @@
     (define file (hash-ref file-tbl song #false))
     (define ent (and file (find-entry-in-group song start group t)))
     (match ent
-      [(entry song t-start-sym t-end-sym phrase who)
-       (define start (duration-symbol-seconds t-start-sym))
+      [(entry song t-start _ phrase who)
        (define vps
          (video-player-server/file file))
-       (send vps seek start)
-       #;(send vps play)
+       (send vps seek t-start)
        (set! held-playing? vps)]
       [_ (void)]))
 
@@ -348,9 +320,8 @@
   callback)
 
 
-(define (plot-entry-groups dim songs dur-tbl file-tbl gs)
+(define (plot-entry-groups dim songs dur-sec-tbl file-tbl gs)
   (define n (length gs))
-  (define dur-sec-tbl (song-duration-seconds-table songs dur-tbl))
   (define start-sec-tbl (song-start-seconds-table songs dur-sec-tbl))
   (define phrases
     (for/list ([g (in-list gs)]) (entry-tag (last g))))
@@ -386,7 +357,7 @@
            (points
             #:color i
             (for/list ([e (in-list g)])
-              (list (entry-seconds songs dur-tbl e) i))))))))
+              (list (entry-seconds start-sec-tbl e) i))))))))
 
     (send snip set-mouse-event-callback
           (make-current-song-renderer songs
