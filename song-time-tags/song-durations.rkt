@@ -11,8 +11,8 @@
 (begin-for-syntax
   (define-syntax-class song
     #:datum-literals [unquote]
-    [pattern a:number
-      #:with datum #'a]
+    [pattern b:number
+      #:with datum #'b]
     [pattern (a:number, b:number)
       #:with datum #'(a b)])
 

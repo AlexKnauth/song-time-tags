@@ -28,6 +28,8 @@
 (begin-for-syntax
   (define-syntax-class song
     #:datum-literals [unquote]
+    [pattern b:number
+      #:with datum #'b]
     [pattern (a:number, b:number)
       #:with datum #'(a b)])
 
@@ -78,13 +80,14 @@
   [['() (cons _ _)] #true]
   [[(cons _ _) '()] #false])
 
+(define (song->list-of-number s)
+  (match s
+    [(list (? number? a) (? number? b))  (list a b)]
+    [(? number? b)                       (list 1 b)]))
+
 (define/match (entry-key ent)
-  [[(entry (list (? number? a) (? number? b))
-           (? number? s)
-           (? number?)
-           (? symbol?)
-           (? list?))]
-   (list a b s)])
+  [[(entry song (? number? start) _ _ _)]
+   (append (song->list-of-number song) (list start))])
 
 (define (group-and-sort-entries entries)
   (sort
@@ -136,7 +139,9 @@
   (format "(~a)" (format-comma-seq lst)))
 
 (define (format-song song)
-  (format-comma-list song))
+  (cond
+    [(list? song) (format-comma-list song)]
+    [(number? song) (format "~a" song)]))
 
 (define (format-who who)
   (match who
@@ -186,7 +191,9 @@
   (define start (hash-ref start-tbl song))
   (define dur (hash-ref dur-tbl song))
   (define end (+ start dur))
-  (render-named-time-interval start end (~a (second song))))
+  (define name (cond [(list? song)  (~a (last song))]
+                     [else          (format-song song)]))
+  (render-named-time-interval start end name))
 
 (define (find-entry-in-group song start group t)
   #;(for/last ([e (in-list group)]

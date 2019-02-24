@@ -55,8 +55,9 @@
 ;; [Hashof Song Seconds] -> [Listof Renderer2D]
 (define (render-song-grid-lines start-sec-tbl)
   (for/list ([(s start) (in-hash start-sec-tbl)])
+    (define n (if (list? s) (last s) s))
     (vrule
-     #:color (if (= (second s) 1) "black" "gray")
+     #:color (if (= n 1) "black" "gray")
      start)))
 
 ;; -----------------------------------------------------------------------------
@@ -76,7 +77,7 @@
 
   (define frame
     (new gui/frame%
-         [label "Hamilton Cross-References"]
+         [label "plot"]
          [width (+ w 50)]
          [height (+ h 60)]))
 
