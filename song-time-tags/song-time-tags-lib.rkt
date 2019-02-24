@@ -232,11 +232,13 @@
   (define (start-play-phrase! ent)
     (match ent
       [(entry song t-start _ _ _)
-       (define file (hash-ref file-tbl song #false))
-       (define vps
-         (video-player-server/file file))
-       (send vps seek t-start)
-       (set! held-playing? vps)]
+       (define file
+         (and file-tbl (hash-ref file-tbl song #false)))
+       (when file
+         (define vps
+           (video-player-server/file file))
+         (send vps seek t-start)
+         (set! held-playing? vps))]
       [_ (void)]))
 
   (define (callback snip event x y)
