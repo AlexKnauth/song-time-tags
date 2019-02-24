@@ -189,11 +189,26 @@
   (render-named-time-interval start end (~a (second song))))
 
 (define (find-entry-in-group song start group t)
-  (for/last ([e (in-list group)]
+  #;(for/last ([e (in-list group)]
              #:when (equal? song (entry-song e))
              #:when (<= (+ start (entry-start e))
                         t))
-    e))
+    e)
+  (let loop ([es group])
+    (match es
+      ['() #false]
+      [(cons e1 rst)
+       #:when (not (equal? song (entry-song e1)))
+       (loop rst)]
+      [(cons e1 '())
+       e1]
+      [(cons e1 (cons e2 rstrst))
+       #:when (not (equal? song (entry-song e2)))
+       e1]
+      [(cons e1 (and rst (cons e2 rstrst)))
+       (cond
+         [(<= (+ start (entry-start e2)) t)  (loop rst)]
+         [else                               e1])])))
 
 ;; Entry -> Pict
 (define (entry-info-pict ent)
