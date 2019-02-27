@@ -58,12 +58,19 @@
 
 ;; -----------------------------------------------
 
+;; String -> String
+(define (normalize-for-path s)
+  (regexp-replaces s '([#rx":" "_"])))
+
 ;; #:album-artist String #:album String -> [Maybe Path]
 (define (itunes-album-dir #:album-artist album-artist
                           #:album album)
   (define itunes-music (find-itunes-music-dir))
   (define album-dir
-    (and itunes-music (build-path itunes-music album-artist album)))
+    (and itunes-music
+         (build-path itunes-music
+                     (normalize-for-path album-artist)
+                     (normalize-for-path album))))
   (and album-dir (directory-exists? album-dir) album-dir))
 
 ;; Path -> [Hashof Song Path]
